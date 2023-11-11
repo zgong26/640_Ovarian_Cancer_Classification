@@ -41,11 +41,19 @@ class OvarianCancerDataset(Dataset):
 
 # Usage
 dataset = OvarianCancerDataset(annotations_file='train.csv', root_dir='modified_images_tensors')
-train_loader = DataLoader(dataset, batch_size=128, shuffle=True)
+train_loader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 # Modify ConvNeXt Model
+"""
+# convnext model
 model = models.convnext_base(pretrained=True)
 model.classifier[2] = nn.Linear(in_features=1024, out_features=5)
+"""
+# ResNet-101 model
+model = models.resnet101(pretrained=True)  # Load the pretrained ResNet-50 model
+num_ftrs = model.fc.in_features
+model.fc = nn.Linear(num_ftrs, 5)  # Replace the fully-connected layer with a new one with 5 outputs
+
 
 # Loss and Optimizer
 criterion = nn.CrossEntropyLoss()
@@ -55,9 +63,13 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
+max_accuracy = 0.0
 # Training Loop
 num_epochs = 99999999999999999
 for epoch in range(num_epochs):
+    running_loss = 0.0
+    correct_predictions = 0
+    total_predictions = 0
     for images, labels in tqdm(train_loader):
         images = images.to(device)
         labels = labels.to(device)
@@ -65,13 +77,24 @@ for epoch in range(num_epochs):
         # Forward pass
         outputs = model(images)
         loss = criterion(outputs, labels)
+        running_loss += loss.item()
+
+        # Calculate accuracy
+        _, predicted = torch.max(outputs, 1)
+        total_predictions += labels.size(0)
+        correct_predictions += (predicted == labels).sum().item()
 
         # Backward and optimize
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-    torch.save(model.state_dict(), 'ovarian_cancer_model.pth')
-    print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+    epoch_loss = running_loss / len(train_loader)
+    epoch_accuracy = correct_predictions / total_predictions
+    if epoch_accuracy >= max_accuracy:
+        torch.save(model.state_dict(), 'ovarian_cancer_model.pth')
+        max_accuracy = epoch_accuracy
+    print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.4f}, MaxAccuracy: {max_accuracy:.4f}')
 
 # Save the model checkpoint
 torch.save(model.state_dict(), 'ovarian_cancer_model.pth')
