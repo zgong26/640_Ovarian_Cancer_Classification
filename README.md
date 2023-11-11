@@ -13,6 +13,8 @@ Note: 100% GPU Consumption
 Transfrom original images from 'train_images_compressed_80' folder to tensors and save them to 'modified_images_tensors' folder.
 Implemented a SmartCenterCrop class to automatically and randomly choose a square that contains the most tissues. The square is then sent to the pipline to be generated to tensors.
 Note: Use 16 threads in CPU by default. Adjust max_worker in process_dataset_multithreaded function accordingly.
+### testing.py
+Evaluate the model performance
 ### GPU_Usage.py
 Prints out current GPU usage to check if GPU is used rather than CPU
 ### Playground.py

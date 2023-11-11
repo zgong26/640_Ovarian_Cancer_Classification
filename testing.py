@@ -1,17 +1,18 @@
 import torch
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
-from PIL import Image, ImageOps
-import os
+import torch.nn as nn
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader, Dataset
 import pandas as pd
-from tqdm import tqdm
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
-import concurrent.futures
-import cv2
-import random
-import cv2
-import numpy as np
 from PIL import Image
+import torchvision.models as models
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
+
+import os
+import numpy as np
+from tqdm import tqdm
+import cv2
+
+
 
 
 class SmartCenterCrop(object):
@@ -19,7 +20,6 @@ class SmartCenterCrop(object):
         self.output_size = output_size
 
     def calculate_purple_score(self, hsv_square):
-        # Define range for purple hue in HSV
         lower_purple = np.array([130, 50, 50])  # Adjust as needed
         upper_purple = np.array([150, 255, 255])  # Adjust as needed
 
@@ -81,8 +81,6 @@ class SmartCenterCrop(object):
         else:
             return img  # Return the original if no best square was found
 
-
-# Define transformations
 transform_pipeline = Compose([
     SmartCenterCrop(1024),
     # MakeSquare(fill_color=(0, 0, 0)),
@@ -91,54 +89,32 @@ transform_pipeline = Compose([
     Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-transform_pipeline_image = Compose([
-    SmartCenterCrop(1024),
-    # MakeSquare(fill_color=(0, 0, 0)),
-    Resize((512, 512)),
-])
 
+model = models.resnet101(pretrained=False)
+num_ftrs = model.fc.in_features
+model.fc = nn.Linear(num_ftrs, 5)
+model.load_state_dict(torch.load(
+    'ovarian_cancer_model.pth'))  # Make sure 'ovarian_cancer_model.pth' locates at the same path as the script
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+model.eval()
 
-def process_image(row):
-    tensor = True  # this flag ensures whether tensors are saved or jpg images are saved
+annotations = pd.read_csv('test.csv')
+root_dir = 'test_images_compressed_80'
+Image.MAX_IMAGE_PIXELS = None
+
+for index, row in annotations.iterrows():
     img_id = row[0]
     img_name = os.path.join(root_dir, f"{img_id}.jpg")
+    with Image.open(img_name).convert("RGB") as image:
+        transformed_image = transform_pipeline(image).unsqueeze(0)
+        transformed_image = transformed_image.to(device)
+    with torch.no_grad():
+        outputs = model(transformed_image)
 
-    try:
-        Image.MAX_IMAGE_PIXELS = None
-        with Image.open(img_name).convert("RGB") as image:
-            # Apply transformations
-            if tensor:
-                transformed_image = transform_pipeline(image)
-            else:
-                transformed_image = transform_pipeline_image(image)
+    probabilities = torch.nn.functional.softmax(outputs, dim=1)
+    print(probabilities)
 
-        # Save the tensor to disk
-        if tensor:
-            torch.save(transformed_image, os.path.join(output_dir, f"{img_id}.pt"))
-        else:
-            transformed_image.save(os.path.join(output_dir, f"{img_id}.jpg"))
-    except IOError as e:
-        # Handle exceptions (e.g., file not found, etc.)
-        print(f"Error processing {img_id}: {e}")
-
-
-def process_dataset_multithreaded(annotations, max_workers=16):
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Use a list comprehension to create a list of futures
-        futures = [executor.submit(process_image, row) for index, row in annotations.iterrows()]
-        # Use tqdm to display progress
-        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
-            continue
-
-
-# Read the CSV file containing image IDs and labels
-annotations = pd.read_csv('train.csv')
-root_dir = 'train_images_compressed_80'  # Original images directory
-output_dir = 'modified_images_tensors'  # Directory where transformed tensors will be saved
-
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-
-process_dataset_multithreaded(annotations)
-
-print("All image tensors have been processed and saved.")
+"""
+'CC': 0, 'EC': 1, 'LGSC': 2, 'HGSC': 3, 'MC': 4
+"""
