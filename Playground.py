@@ -2,7 +2,7 @@ import pyautogui
 import time
 
 # Set the duration (20 minutes)
-duration = 20 * 60  # 20 minutes * 60 seconds
+duration = 50 * 60  # 20 minutes * 60 seconds
 
 # Wait for 20 minutes
 print(f"Waiting for {duration / 60} minutes")
