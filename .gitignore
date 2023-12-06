@@ -1,2 +1,4 @@
 /train_images_compressed_80/
 ovarian_cancer_model.pth
+*.pt
+*.jpg

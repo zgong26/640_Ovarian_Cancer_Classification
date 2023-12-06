@@ -1,119 +1,120 @@
-import torch
-import torch.nn as nn
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset
-import pandas as pd
-from PIL import Image
+import csv
+import random
+
 import torchvision.models as models
+import torch.nn as nn
+import torch
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
-
 import os
-import numpy as np
+import pandas as pd
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+import torchvision.transforms as transforms
+import concurrent.futures
 import cv2
+import numpy as np
+from PIL import Image, ImageOps
+from queue import Queue
 
 
+def is_content_rich(square):
+    gray_square = cv2.cvtColor(square, cv2.COLOR_RGB2GRAY)
+
+    # Calculate the percentage of black and white pixels
+    black_and_white_content = np.sum((gray_square < 40) | (gray_square > 200))
+
+    # Convert square to HSV for purple color check
+    hsv_square = cv2.cvtColor(square, cv2.COLOR_RGB2HSV)
+
+    # Define range for purple hue in HSV
+    lower_purple = np.array([130, 50, 50])
+    upper_purple = np.array([150, 255, 255])
+
+    # Create a mask that captures areas within the purple range
+    mask = cv2.inRange(hsv_square, lower_purple, upper_purple)
+
+    # Calculate the percentage of purple pixels
+    purple_content = np.sum(mask)
+
+    # Decide if the content is rich based on black & white and purple content
+    num_pixels = square.shape[0] * square.shape[1]
+    black_and_white_percentage = (black_and_white_content / num_pixels) * 100
+    purple_percentage = (purple_content / num_pixels) * 100
+    return black_and_white_percentage < 50 and purple_percentage > 75
 
 
-class SmartCenterCrop(object):
-    def __init__(self, output_size):
-        self.output_size = output_size
+def process_image(img):
+    res = []
+    img_np = np.array(img)
+    h, w, _ = img_np.shape
+    square_size = int(np.sqrt(h * w / 1000))  # Calculate size of each square
 
-    def calculate_purple_score(self, hsv_square):
-        lower_purple = np.array([130, 50, 50])  # Adjust as needed
-        upper_purple = np.array([150, 255, 255])  # Adjust as needed
+    # Iterate over the image and slice it into squares
+    for y in range(0, h - square_size + 1, square_size):
+        for x in range(0, w - square_size + 1, square_size):
+            square = img_np[y:y + square_size, x:x + square_size]
+            if is_content_rich(square):
+                res.append(square)
 
-        # Create a mask that captures areas within the purple range
-        mask = cv2.inRange(hsv_square, lower_purple, upper_purple)
-
-        # The score is the sum of all pixels in the mask
-        score = np.sum(mask)
-        return score
-
-    def __call__(self, img):
-        # Convert PIL Image to a numpy array
-        img_np = np.array(img)
-
-        # Convert to HSV color space
-        hsv_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
-
-        # Convert to grayscale for contour detection
-        gray_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-
-        # Apply threshold to get the binary image
-        _, thresh_img = cv2.threshold(gray_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Find contours
-        contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # If no contours are found, return the original image
-        if not contours:
-            return img
-
-        # Find the largest contour and its bounding box
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
-
-        # Initialize best score and best square
-        best_score = -1
-        best_square = None
-
-        # Attempt to find the best square within the largest contour
-        for _ in range(6):
-            # Randomly choose a starting point for the square
-            random_x = x + np.random.randint(0, max(1, w - self.output_size))
-            random_y = y + np.random.randint(0, max(1, h - self.output_size))
-
-            # Extract the square from the HSV image
-            hsv_square = hsv_img[random_y:random_y + self.output_size, random_x:random_x + self.output_size]
-
-            # Calculate the score for the square based on purple content
-            score = self.calculate_purple_score(hsv_square)
-
-            # If the score is better than the best score, update the best square
-            if score > best_score:
-                best_score = score
-                best_square = img_np[random_y:random_y + self.output_size, random_x:random_x + self.output_size]
-
-        # Convert the best square numpy array back to PIL Image if a best square was found
-        if best_square is not None:
-            return Image.fromarray(best_square)
-        else:
-            return img  # Return the original if no best square was found
-
-transform_pipeline = Compose([
-    SmartCenterCrop(1024),
-    # MakeSquare(fill_color=(0, 0, 0)),
-    Resize((512, 512)),
-    ToTensor(),
-    Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+    # Randomly select 64 squares
+    random.shuffle(res)
+    return res[:min(64, len(res))]
 
 
-model = models.resnet101(pretrained=False)
+def evaluate_image(model, squares):
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    batch = []
+    for square in squares:
+        square_img = Image.fromarray(square)
+        resized_img = square_img.resize((512, 512))
+        tensor_img = transforms.ToTensor()(resized_img)
+        normalized_tensor = normalize(tensor_img).to(device)
+        batch.append(normalized_tensor)
+    tensor_batch = torch.stack(batch).to(device)
+
+    with torch.no_grad():
+        output = model(tensor_batch)
+        probabilities = torch.nn.functional.softmax(output, dim=1)
+        predicted_classes = torch.argmax(probabilities, dim=1)
+
+    # Find the most common prediction
+    pc_list = predicted_classes.tolist()
+    most_common_prediction = max(set(pc_list), key=pc_list.count)
+    confidences = [probabilities[i, most_common_prediction].item() for i in range(len(probabilities)) if
+                   pc_list[i] == most_common_prediction]
+    average_confidence = sum(confidences) / len(confidences) if confidences else 0
+    print(f"confidence: {average_confidence}")
+    return most_common_prediction
+
+
+# Model Setup
+Image.MAX_IMAGE_PIXELS = None
+model = models.resnet50(pretrained=False)
 num_ftrs = model.fc.in_features
 model.fc = nn.Linear(num_ftrs, 5)
-model.load_state_dict(torch.load(
-    'ovarian_cancer_model.pth'))  # Make sure 'ovarian_cancer_model.pth' locates at the same path as the script
+model.load_state_dict(torch.load('ovarian_cancer_model_10_0.7943.pth'))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 model.eval()
 
-annotations = pd.read_csv('test.csv')
+# Load and process the image
 root_dir = 'test_images_compressed_80'
-Image.MAX_IMAGE_PIXELS = None
+# img_list = [9,39,11,93,2]
+img_list = list(range(108))
+labels = ['CC', 'EC', 'LGSC', 'HGSC', 'MC']
+for i in img_list:
+    img_name = os.path.join(root_dir, f"{i}.jpg")
+    image = Image.open(img_name).convert("RGB")
+    squares = process_image(image)
 
-for index, row in annotations.iterrows():
-    img_id = row[0]
-    img_name = os.path.join(root_dir, f"{img_id}.jpg")
-    with Image.open(img_name).convert("RGB") as image:
-        transformed_image = transform_pipeline(image).unsqueeze(0)
-        transformed_image = transformed_image.to(device)
-    with torch.no_grad():
-        outputs = model(transformed_image)
+    # Evaluate the image
+    try:
+        final_prediction = evaluate_image(model, squares)
+        print(f"{i}: {labels[final_prediction]}")
+    except:
+        print(f"{i}: error")
 
-    probabilities = torch.nn.functional.softmax(outputs, dim=1)
-    print(probabilities)
 
 """
 'CC': 0, 'EC': 1, 'LGSC': 2, 'HGSC': 3, 'MC': 4
