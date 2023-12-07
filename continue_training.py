@@ -42,7 +42,7 @@ class OvarianCancerDataset(Dataset):
 
 
 # !!!!!
-ep = 9
+ep = 11
 
 annotations = pd.read_csv('averaged_train.csv')
 train_annotations, val_annotations = train_test_split(annotations, test_size=0.2, random_state=42)
@@ -56,7 +56,7 @@ model = models.resnet50(pretrained=True)  # Load the pretrained ResNet-50 model
 num_ftrs = model.fc.in_features
 model.fc = nn.Linear(num_ftrs, 5)  # Replace the fully-connected layer with a new one with 5 outputs
 # Load the saved state dict
-model.load_state_dict(torch.load('ovarian_cancer_model_8_0.7342.pth'))
+model.load_state_dict(torch.load('ovarian_cancer_model_10_0.7943.pth'))
 
 # Loss and Optimizer
 criterion = nn.CrossEntropyLoss()

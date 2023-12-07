@@ -103,17 +103,22 @@ root_dir = 'test_images_compressed_80'
 # img_list = [9,39,11,93,2]
 img_list = list(range(108))
 labels = ['CC', 'EC', 'LGSC', 'HGSC', 'MC']
-for i in img_list:
-    img_name = os.path.join(root_dir, f"{i}.jpg")
-    image = Image.open(img_name).convert("RGB")
-    squares = process_image(image)
+with open('test.csv', mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['image_id', 'label'])
+    for i in img_list:
+        img_name = os.path.join(root_dir, f"{i}.jpg")
+        image = Image.open(img_name).convert("RGB")
+        squares = process_image(image)
 
-    # Evaluate the image
-    try:
-        final_prediction = evaluate_image(model, squares)
-        print(f"{i}: {labels[final_prediction]}")
-    except:
-        print(f"{i}: error")
+        # Evaluate the image
+        try:
+            final_prediction = evaluate_image(model, squares)
+            writer.writerow([i, labels[final_prediction]])
+            print(f"{i}: {labels[final_prediction]}")
+        except:
+            print(f"{i}: error")
+            writer.writerow([i, 'HGSC'])
 
 
 """
